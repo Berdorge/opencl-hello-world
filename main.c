@@ -2,8 +2,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#if __APPLE__
+#ifdef __APPLE__
 #include <OpenCL/cl.h>
+#else
+#include <CL/cl.h>
 #endif
 
 static const size_t playground_buffer_size = 8192;

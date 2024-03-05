@@ -8,6 +8,18 @@
 #include <CL/cl.h>
 #endif
 
+static size_t ceil_division(size_t a, size_t b) {
+    if (a % b) {
+        return a / b + 1;
+    } else {
+        return a / b;
+    }
+}
+
+static size_t min_size(size_t a, size_t b) {
+    return a < b ? a : b;
+}
+
 static const size_t playground_buffer_size = 8192;
 static const size_t elements = 100000;
 
@@ -105,8 +117,34 @@ int main(int argc, char* argv[]) {
     err |=
         clEnqueueWriteBuffer(queue, device_addend, CL_FALSE, 0, bytes, host_addend, 0, NULL, NULL);
 
-    size_t global_work_size = 1;
-    err = clEnqueueNDRangeKernel(queue, kernel, 1, NULL, &global_work_size, NULL, 0, NULL, NULL);
+    size_t local_work_size;
+    clGetKernelWorkGroupInfo(
+        kernel,
+        device_id,
+        CL_KERNEL_WORK_GROUP_SIZE,
+        sizeof(local_work_size),
+        &local_work_size,
+        NULL
+    );
+    printf("Kernel work group size is %zu\n", local_work_size);
+
+    size_t work_groups = ceil_division(elements, local_work_size);
+    printf("There are %zu work groups\n", work_groups);
+
+    size_t global_work_size = work_groups * local_work_size;
+    printf("Global work size is %zu\n", global_work_size);
+
+    err = clEnqueueNDRangeKernel(
+        queue,
+        kernel,
+        1,
+        NULL,
+        &global_work_size,
+        &local_work_size,
+        0,
+        NULL,
+        NULL
+    );
 
     clEnqueueReadBuffer(queue, device_sum, CL_TRUE, 0, bytes, host_sum, 0, NULL, NULL);
 
@@ -115,7 +153,7 @@ int main(int argc, char* argv[]) {
         sum += host_sum[i];
     }
 
-    printf("sum: %f\n", host_sum[0]);
+    printf("sum: %f\n", sum);
 
     clReleaseMemObject(device_augend);
     clReleaseMemObject(device_addend);

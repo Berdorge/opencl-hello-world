@@ -1,4 +1,3 @@
-#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -21,22 +20,43 @@ static size_t min_size(size_t a, size_t b) {
 }
 
 static const size_t playground_buffer_size = 8192;
-static const size_t elements = 100000;
 
 int main(int argc, char* argv[]) {
-    float* host_augend;
-    float* host_addend;
-    float* host_sum;
+    cl_uint N;
+    cl_uint M;
+    cl_uint K;
 
-    size_t bytes = elements * sizeof(float);
+    scanf("%u%u%u", &N, &K, &M);
 
-    host_augend = (float*)malloc(bytes);
-    host_addend = (float*)malloc(bytes);
-    host_sum = (float*)malloc(bytes);
+    size_t a_size = sizeof(float) * M * K;
+    size_t b_size = sizeof(float) * K * N;
+    size_t c_size = sizeof(float) * M * N;
 
-    for (size_t i = 0; i < elements; i++) {
-        host_augend[i] = sinf(i) * sinf(i);
-        host_addend[i] = cosf(i) * cosf(i);
+    float* host_a = (float*)malloc(a_size);
+    float* host_b = (float*)malloc(b_size);
+    float* host_c = (float*)malloc(c_size);
+    float* expected_c = (float*)malloc(c_size);
+
+    for (int i = 0; i < M; ++i) {
+        for (int j = 0; j < K; ++j) {
+            scanf("%f", host_a + i * K + j);
+        }
+    }
+
+    for (int i = 0; i < K; ++i) {
+        for (int j = 0; j < N; ++j) {
+            scanf("%f", host_b + i * N + j);
+        }
+    }
+
+    for (int i = 0; i < M; ++i) {
+        for (int j = 0; j < N; ++j) {
+            float sum = 0;
+            for (int k = 0; k < K; ++k) {
+                sum += host_a[i * K + k] * host_b[k * N + j];
+            }
+            expected_c[i * N + j] = sum;
+        }
     }
 
     cl_int err;
@@ -95,77 +115,62 @@ int main(int argc, char* argv[]) {
     }
 
     cl_kernel kernel;
-    kernel = clCreateKernel(program, "add", &err);
+    kernel = clCreateKernel(program, "matrix_multiply", &err);
 
-    cl_mem device_augend;
-    cl_mem device_addend;
-    cl_mem device_sum;
-    device_augend = clCreateBuffer(context, CL_MEM_READ_ONLY, bytes, NULL, NULL);
-    device_addend = clCreateBuffer(context, CL_MEM_READ_ONLY, bytes, NULL, NULL);
-    device_sum = clCreateBuffer(context, CL_MEM_WRITE_ONLY, bytes, NULL, NULL);
+    cl_mem device_a;
+    cl_mem device_b;
+    cl_mem device_c;
+    device_a = clCreateBuffer(context, CL_MEM_READ_ONLY, a_size, NULL, NULL);
+    device_b = clCreateBuffer(context, CL_MEM_READ_ONLY, b_size, NULL, NULL);
+    device_c = clCreateBuffer(context, CL_MEM_WRITE_ONLY, c_size, NULL, NULL);
 
-    err = clSetKernelArg(kernel, 0, sizeof(cl_mem), &device_augend);
-    err |= clSetKernelArg(kernel, 1, sizeof(cl_mem), &device_addend);
-    err |= clSetKernelArg(kernel, 2, sizeof(cl_mem), &device_sum);
-    err |= clSetKernelArg(kernel, 3, sizeof(unsigned int), &elements);
+    err = clSetKernelArg(kernel, 0, sizeof(cl_mem), &device_a);
+    err |= clSetKernelArg(kernel, 1, sizeof(cl_mem), &device_b);
+    err |= clSetKernelArg(kernel, 2, sizeof(cl_mem), &device_c);
+    err |= clSetKernelArg(kernel, 3, sizeof(cl_uint), &N);
+    err |= clSetKernelArg(kernel, 4, sizeof(cl_uint), &M);
+    err |= clSetKernelArg(kernel, 5, sizeof(cl_uint), &K);
 
     cl_command_queue queue;
     queue = clCreateCommandQueue(context, device_id, CL_QUEUE_PROFILING_ENABLE, &err);
 
-    err =
-        clEnqueueWriteBuffer(queue, device_augend, CL_FALSE, 0, bytes, host_augend, 0, NULL, NULL);
-    err |=
-        clEnqueueWriteBuffer(queue, device_addend, CL_FALSE, 0, bytes, host_addend, 0, NULL, NULL);
+    err = clEnqueueWriteBuffer(queue, device_a, CL_FALSE, 0, a_size, host_a, 0, NULL, NULL);
+    err |= clEnqueueWriteBuffer(queue, device_b, CL_FALSE, 0, b_size, host_b, 0, NULL, NULL);
 
-    size_t local_work_size;
-    clGetKernelWorkGroupInfo(
-        kernel,
-        device_id,
-        CL_KERNEL_WORK_GROUP_SIZE,
-        sizeof(local_work_size),
-        &local_work_size,
-        NULL
-    );
-    printf("Kernel work group size is %zu\n", local_work_size);
+    const size_t global_work_size[] = {N, M};
 
-    size_t work_groups = ceil_division(elements, local_work_size);
-    printf("There are %zu work groups\n", work_groups);
+    err = clEnqueueNDRangeKernel(queue, kernel, 2, NULL, &global_work_size, NULL, 0, NULL, NULL);
 
-    size_t global_work_size = work_groups * local_work_size;
-    printf("Global work size is %zu\n", global_work_size);
+    clEnqueueReadBuffer(queue, device_c, CL_TRUE, 0, c_size, host_c, 0, NULL, NULL);
 
-    err = clEnqueueNDRangeKernel(
-        queue,
-        kernel,
-        1,
-        NULL,
-        &global_work_size,
-        &local_work_size,
-        0,
-        NULL,
-        NULL
-    );
-
-    clEnqueueReadBuffer(queue, device_sum, CL_TRUE, 0, bytes, host_sum, 0, NULL, NULL);
-
-    float sum = 0;
-    for (size_t i = 0; i < elements; i++) {
-        sum += host_sum[i];
+    printf("\nActual output:\n");
+    for (int i = 0; i < N; ++i) {
+        for (int j = 0; j < M; ++j) {
+            printf("%f ", host_c[i * M + j]);
+        }
+        printf("\n");
     }
 
-    printf("sum: %f\n", sum);
+    printf("\nExpected output:\n");
+    for (int i = 0; i < N; ++i) {
+        for (int j = 0; j < M; ++j) {
+            printf("%f ", expected_c[i * M + j]);
+        }
+        printf("\n");
+    }
 
-    clReleaseMemObject(device_augend);
-    clReleaseMemObject(device_addend);
-    clReleaseMemObject(device_sum);
+    clReleaseMemObject(device_a);
+    clReleaseMemObject(device_b);
+    clReleaseMemObject(device_c);
     clReleaseProgram(program);
     clReleaseKernel(kernel);
     clReleaseCommandQueue(queue);
     clReleaseContext(context);
 
-    free(host_augend);
-    free(host_addend);
-    free(host_sum);
+    free(host_a);
+    free(host_b);
+    free(host_c);
+    free(expected_c);
 
     return 0;
 }
